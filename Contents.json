@@ -1,0 +1,20 @@
+// File: VolunteerOpportunity.swift
+import SwiftUI
+
+struct Tag: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let color: Color
+}
+
+struct VolunteerOpportunity: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+    let date: Date        // date and time combined
+    let topic: String
+    let description: String
+    let hours: Double
+    let tags: [Tag]
+    let organization: String
+    let location: String  // address string for Maps
+}

@@ -1,0 +1,466 @@
+// File: ContentView.swift
+import SwiftUI
+import MapKit
+import EventKit
+
+@main
+struct HourlyApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
+struct ContentView: View {
+    @State private var opportunities = sampleOpportunities
+    @State private var signedUpOpportunities: [VolunteerOpportunity] = []
+    @State private var manualHours: [ManualHoursEntry] = []
+    @State private var availabilityDates: Set<DateComponents> = []
+    @State private var manualTitle = ""
+    @State private var manualDate = Date()
+    @State private var manualHoursDouble = ""
+    @State private var alertMessage: String?
+    @State private var showAlert = false
+    @State private var selectedDate = Date()
+    @State private var verifiedEntries: [VerifiedEntry] = []
+    @State private var totalVerifiedHours: Double = 0
+    @State private var showSuccessScreen = false
+
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        TabView {
+            opportunitiesTab
+            scheduleTab
+            verifyHoursTab
+            manualEntryTab
+        }
+    }
+
+    // MARK: - Tab Views
+
+    private var opportunitiesTab: some View {
+        NavigationView {
+            List(filteredOpportunities) { opportunity in
+                NavigationLink(destination: OpportunityDetailView(opportunity: opportunity, isSignedUp: signedUpOpportunities.contains(opportunity), signupAction: { signup(for: opportunity) }, revokeAction: { revokeSignup(for: opportunity) })) {
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text(opportunity.title)
+                                .font(.headline)
+                            Spacer()
+                            Text(dateFormatter.string(from: opportunity.date))
+                                .font(.subheadline)
+                        }
+                        Text(opportunity.topic)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(5)
+                }
+            }
+            .navigationTitle("Opportunities")
+        }
+        .tabItem {
+            Label("Opportunities", systemImage: "list.bullet")
+        }
+    }
+
+    private var scheduleTab: some View {
+        VStack {
+            Text("Availability")
+                .font(.largeTitle)
+                .padding()
+
+            DatePicker(
+                "Select Date",
+                selection: $selectedDate,
+                displayedComponents: [.date]
+            )
+            .datePickerStyle(.graphical)
+            .padding()
+
+            Button("Add Date") {
+                let comp = Calendar.current.dateComponents([.year, .month, .day], from: selectedDate)
+                availabilityDates.insert(comp)
+            }
+            .padding(.bottom)
+
+            Text("Selected Dates:")
+                .font(.headline)
+                .padding(.top)
+
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ForEach(Array(availabilityDates).sorted { (a, b) in
+                        (Calendar.current.date(from: a) ?? Date()) < (Calendar.current.date(from: b) ?? Date())
+                    }, id: \.self) { comp in
+                        if let date = Calendar.current.date(from: comp) {
+                            HStack {
+                                Text(dateFormatter.string(from: date))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(8)
+                                    .background(Color.blue.opacity(0.3))
+                                    .cornerRadius(6)
+                                Button(action: {
+                                    availabilityDates.remove(comp)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .frame(maxHeight: 200)
+            .padding(.bottom)
+        }
+        .tabItem {
+            Label("Schedule", systemImage: "calendar")
+        }
+    }
+
+    private var verifyHoursTab: some View {
+        NavigationView {
+            VStack {
+                List {
+                    Section("Signed Up Events") {
+                        if signedUpOpportunities.filter({ !isVerifiedEvent($0) }).isEmpty {
+                            Text("No unverified signed up events.")
+                                .foregroundColor(.gray)
+                        }
+                        ForEach(signedUpOpportunities.filter { !isVerifiedEvent($0) }) { opportunity in
+                            VStack(alignment: .leading) {
+                                Text(opportunity.title)
+                                Text(dateFormatter.string(from: opportunity.date))
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text("Hours: \(opportunity.hours, specifier: "%.1f")")
+                                    .font(.caption)
+                                Button("Verify") {
+                                    verifyEvent(opportunity)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            .padding(5)
+                        }
+                    }
+                    Section("Manual Entries") {
+                        if manualHours.filter({ !$0.verified }).isEmpty {
+                            Text("No unverified manual entries.")
+                                .foregroundColor(.gray)
+                        }
+                        ForEach(manualHours.filter { !$0.verified }) { entry in
+                            VStack(alignment: .leading) {
+                                Text(entry.title)
+                                Text(dateFormatter.string(from: entry.date))
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text("Hours: \(entry.hours, specifier: "%.1f")")
+                                    .font(.caption)
+                                Button("Verify") {
+                                    verifyManual(entry)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            .padding(5)
+                        }
+                    }
+                }
+                .listStyle(InsetGroupedListStyle())
+                Divider()
+                Text("Total Verified Hours: \(totalVerifiedHours, specifier: "%.1f")")
+                    .font(.headline)
+                    .padding(.top)
+                List {
+                    Section("Verified Entries") {
+                        if verifiedEntries.isEmpty {
+                            Text("No verified hours yet.")
+                                .foregroundColor(.gray)
+                        }
+                        ForEach(verifiedEntries.sorted(by: { $0.date > $1.date })) { entry in
+                            VStack(alignment: .leading) {
+                                Text(entry.title)
+                                Text(dateFormatter.string(from: entry.date))
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text("Hours: \(entry.hours, specifier: "%.1f")")
+                                    .font(.caption)
+                                Text("Source: \(entry.source)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(5)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Verify Hours")
+            .alert(isPresented: $showAlert) {
+                Alert(title: Text(alertMessage ?? ""))
+            }
+            .sheet(isPresented: $showSuccessScreen) {
+                VStack(spacing: 20) {
+                    Text("Success!")
+                        .font(.largeTitle)
+                        .foregroundColor(.green)
+                    Text("Your hours have been verified and added to your total.")
+                    Button("OK") {
+                        showSuccessScreen = false
+                    }
+                    .padding()
+                }
+                .padding()
+            }
+        }
+        .tabItem {
+            Label("Verify Hours", systemImage: "checkmark.seal")
+        }
+    }
+
+    private var manualEntryTab: some View {
+        NavigationView {
+            VStack {
+                Form {
+                    TextField("Title", text: $manualTitle)
+                    DatePicker("Date", selection: $manualDate, displayedComponents: [.date])
+                    TextField("Hours (decimal)", text: $manualHoursDouble)
+                        .keyboardType(.decimalPad)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Done") {
+                                    UIApplication.shared.hideKeyboard()
+                                }
+                            }
+                        }
+                    Button("Add Manual Hours") {
+                        UIApplication.shared.hideKeyboard()
+                        addManualHours()
+                    }
+                }
+                .frame(maxWidth: 400)
+            }
+            .onTapGesture {
+                UIApplication.shared.hideKeyboard()
+            }
+            .navigationTitle("Manual Entry")
+        }
+        .tabItem {
+            Label("Manual Entry", systemImage: "pencil")
+        }
+    }
+
+    // MARK: - Computed Properties
+
+    var filteredOpportunities: [VolunteerOpportunity] {
+        guard !availabilityDates.isEmpty else { return opportunities }
+        
+        let availableDates = availabilityDates.compactMap { Calendar.current.date(from: $0) }
+        
+        return opportunities.filter { opp in
+            availableDates.contains { date in
+                let oppComp = Calendar.current.dateComponents([.year, .month, .day], from: opp.date)
+                return Calendar.current.isDate(date, inSameDayAs: Calendar.current.date(from: oppComp) ?? Date())
+            }
+        }
+    }
+
+    // MARK: - Functions
+
+    func signup(for opportunity: VolunteerOpportunity) {
+        guard !signedUpOpportunities.contains(opportunity) else {
+            alertMessage = "You already signed up for \"\(opportunity.title)\"."
+            showAlert = true
+            return
+        }
+        signedUpOpportunities.append(opportunity)
+        alertMessage = "Success! Signed up for \"\(opportunity.title)\"."
+        showAlert = true
+    }
+
+    func revokeSignup(for opportunity: VolunteerOpportunity) {
+        if let index = signedUpOpportunities.firstIndex(of: opportunity) {
+            signedUpOpportunities.remove(at: index)
+            alertMessage = "Signup revoked for \"\(opportunity.title)\"."
+            showAlert = true
+        }
+    }
+
+    func addManualHours() {
+        guard let hours = Double(manualHoursDouble), !manualTitle.isEmpty else {
+            alertMessage = "Please enter a valid title and numeric hours."
+            showAlert = true
+            return
+        }
+
+        let newEntry = ManualHoursEntry(title: manualTitle, hours: hours, date: manualDate, verified: false)
+        manualHours.append(newEntry)
+        alertMessage = "Added \(String(format: "%.1f", hours)) manual hours."
+        showAlert = true
+
+        // Clear input fields
+        manualTitle = ""
+        manualHoursDouble = ""
+        manualDate = Date()
+    }
+
+    func isVerifiedEvent(_ opportunity: VolunteerOpportunity) -> Bool {
+        verifiedEntries.contains(where: { $0.title == opportunity.title && abs($0.hours - opportunity.hours) < 0.01 && $0.date == opportunity.date && $0.source == "Event" })
+    }
+
+    func verifyEvent(_ opportunity: VolunteerOpportunity) {
+        guard !isVerifiedEvent(opportunity) else {
+            alertMessage = "Already verified."
+            showAlert = true
+            return
+        }
+        let entry = VerifiedEntry(title: opportunity.title, hours: opportunity.hours, date: opportunity.date, source: "Event")
+        verifiedEntries.append(entry)
+        totalVerifiedHours += opportunity.hours
+        alertMessage = "Event verified!"
+        showAlert = true
+        showSuccessScreen = true
+    }
+
+    func verifyManual(_ entry: ManualHoursEntry) {
+        guard let idx = manualHours.firstIndex(of: entry), !manualHours[idx].verified else {
+            alertMessage = "Already verified."
+            showAlert = true
+            return
+        }
+        manualHours[idx].verified = true
+        let vEntry = VerifiedEntry(title: entry.title, hours: entry.hours, date: entry.date, source: "Manual")
+        verifiedEntries.append(vEntry)
+        totalVerifiedHours += entry.hours
+        alertMessage = "Manual entry verified!"
+        showAlert = true
+        showSuccessScreen = true
+    }
+}
+
+// MARK: - Opportunity Detail View
+
+struct OpportunityDetailView: View {
+    let opportunity: VolunteerOpportunity
+    let isSignedUp: Bool
+    let signupAction: () -> Void
+    let revokeAction: () -> Void
+
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(opportunity.title)
+                .font(.largeTitle)
+                .bold()
+
+            Text("Organization: \(opportunity.organization)")
+                .font(.headline)
+
+            Text("Date & Time: \(dateFormatter.string(from: opportunity.date))")
+                .font(.subheadline)
+
+            Text("Location: \(opportunity.location)")
+                .font(.subheadline)
+                .foregroundColor(.blue)
+                .onTapGesture {
+                    openInMaps(address: opportunity.location)
+                }
+
+            Text(opportunity.description)
+                .font(.body)
+
+            Text("Topic: \(opportunity.topic)")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            HStack {
+                ForEach(opportunity.tags) { tag in
+                    Text(tag.name)
+                        .font(.caption)
+                        .padding(5)
+                        .background(tag.color.opacity(0.3))
+                        .cornerRadius(5)
+                }
+            }
+
+            Text("Hours: \(opportunity.hours, specifier: "%.1f")")
+                .font(.subheadline)
+
+            Spacer()
+
+            HStack {
+                if isSignedUp {
+                    Button("Revoke Signup") {
+                        revokeAction()
+                    }
+                    .foregroundColor(.red)
+                } else {
+                    Button("Sign Up") {
+                        signupAction()
+                    }
+                }
+
+                Spacer()
+
+                Button("Add to Calendar") {
+                    addToCalendar(opportunity: opportunity)
+                }
+            }
+            .padding(.top)
+        }
+        .padding()
+        .navigationTitle("Details")
+    }
+
+    private func openInMaps(address: String) {
+        let query = address.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        if let url = URL(string: "http://maps.apple.com/?address=\(query)") {
+            UIApplication.shared.open(url)
+        }
+    }
+
+    private func addToCalendar(opportunity: VolunteerOpportunity) {
+        let eventStore = EKEventStore()
+        eventStore.requestAccess(to: .event) { granted, error in
+            if granted {
+                let event = EKEvent(eventStore: eventStore)
+                event.title = opportunity.title
+                event.startDate = opportunity.date
+                event.endDate = opportunity.date.addingTimeInterval(opportunity.hours * 3600)
+                event.notes = opportunity.description
+                event.location = opportunity.location
+                event.calendar = eventStore.defaultCalendarForNewEvents
+                do {
+                    try eventStore.save(event, span: .thisEvent)
+                } catch {
+                    // Handle error
+                }
+            } else {
+                // Handle denied access
+            }
+        }
+    }
+}
+
+// MARK: - Hide Keyboard Extension
+
+extension UIApplication {
+    func hideKeyboard() {
+        sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
